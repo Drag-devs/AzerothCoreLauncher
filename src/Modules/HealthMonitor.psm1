@@ -173,7 +173,7 @@ function Get-AclServerHealth {
     $definition = Get-AzerothServerDefinition -Profile $Profile -Server $Server
     $runtime = Get-AclServerRuntime -Profile $Profile -Server $Server -DataRoot $DataRoot
     $processes = @()
-    if ($null -ne $runtime) {
+    if ($null -ne $runtime -and $null -ne $runtime.ProcessId) {
         $processes = @(Get-Process -Id $runtime.ProcessId -ErrorAction SilentlyContinue)
     }
     $process = if ($processes.Count -gt 0) { $processes[0] } else { $null }
@@ -208,6 +208,177 @@ function Get-AclServerHealth {
         LastLogLine = $lastLogLine
         Message = if ($databaseFailure) { 'Database startup failure detected in the log.' } elseif ($state -eq 'Online') { 'Ready.' } else { 'Waiting for readiness.' }
     }
+}
+
+function Get-AclRecoveryPolicy {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [psobject]$Profile
+    )
+
+    $defaults = @{
+        Enabled = $false
+        RecoverAuthserver = $true
+        RecoverWorldserver = $true
+        MaxAttempts = 5
+        InitialDelaySeconds = 5
+        BackoffMultiplier = 2
+        HealthyResetMinutes = 10
+        RequireSqlOnline = $true
+    }
+    $recovery = if ($null -ne $Profile.PSObject.Properties['Recovery']) { $Profile.Recovery } else { $null }
+    $values = @{}
+    foreach ($name in $defaults.Keys) {
+        $values[$name] = if ($null -ne $recovery -and $null -ne $recovery.PSObject.Properties[$name]) { $recovery.$name } else { $defaults[$name] }
+    }
+
+    return [pscustomobject]@{
+        Enabled = [bool]$values.Enabled
+        RecoverAuthserver = [bool]$values.RecoverAuthserver
+        RecoverWorldserver = [bool]$values.RecoverWorldserver
+        MaxAttempts = [Math]::Max(1, [int]$values.MaxAttempts)
+        InitialDelaySeconds = [Math]::Max(1, [int]$values.InitialDelaySeconds)
+        BackoffMultiplier = [Math]::Max(1, [double]$values.BackoffMultiplier)
+        HealthyResetMinutes = [Math]::Max(1, [int]$values.HealthyResetMinutes)
+        RequireSqlOnline = [bool]$values.RequireSqlOnline
+    }
+}
+
+function Get-AclRecoveryDelaySeconds {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [psobject]$Policy,
+
+        [Parameter(Mandatory)]
+        [int]$Attempt
+    )
+
+    $delay = [double]$Policy.InitialDelaySeconds * [Math]::Pow([double]$Policy.BackoffMultiplier, [Math]::Max(0, $Attempt))
+    return [Math]::Min(86400, [Math]::Max(1, [int][Math]::Ceiling($delay)))
+}
+
+function Invoke-AclRecoverySupervisor {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [psobject]$Profile,
+
+        [string]$DataRoot = (Get-AclDataRoot)
+    )
+
+    $policy = Get-AclRecoveryPolicy -Profile $Profile
+    if (-not $policy.Enabled) {
+        return @()
+    }
+
+    $sqlOnline = if ($policy.RequireSqlOnline) { (Get-AclSqlServerStatus -Profile $Profile).IsOnline } else { $true }
+    $authHealth = Get-AclServerHealth -Profile $Profile -Server Authserver -DataRoot $DataRoot
+    $authOnline = $authHealth.State -eq 'Online'
+    $messages = New-Object 'System.Collections.Generic.List[object]'
+
+    foreach ($server in @('Authserver', 'Worldserver')) {
+        $enabled = if ($server -eq 'Authserver') { $policy.RecoverAuthserver } else { $policy.RecoverWorldserver }
+        if (-not $enabled) {
+            continue
+        }
+
+        $runtime = Get-AclServerRuntime -Profile $Profile -Server $server -DataRoot $DataRoot
+        if ($null -eq $runtime -or $runtime.IntentionalStop -or ($null -ne $runtime.PSObject.Properties['RecoveryCanceled'] -and $runtime.RecoveryCanceled)) {
+            continue
+        }
+        $runtime = Initialize-AclRecoveryRuntime -Runtime $runtime
+
+        $process = if ($null -ne $runtime.ProcessId) { Get-Process -Id $runtime.ProcessId -ErrorAction SilentlyContinue } else { $null }
+        if ($null -ne $process) {
+            $health = if ($server -eq 'Authserver') { $authHealth } else { Get-AclServerHealth -Profile $Profile -Server $server -DataRoot $DataRoot }
+            if ($health.State -eq 'Online') {
+                if ([string]::IsNullOrWhiteSpace([string]$runtime.HealthySinceUtc)) {
+                    $runtime.HealthySinceUtc = [DateTime]::UtcNow.ToString('o')
+                    Set-AclServerRuntime -Profile $Profile -Server $server -Runtime $runtime -DataRoot $DataRoot
+                }
+                elseif ($runtime.RetryAttempt -gt 0 -and ([DateTime]::UtcNow - [DateTime]$runtime.HealthySinceUtc).TotalMinutes -ge $policy.HealthyResetMinutes) {
+                    $runtime.RetryAttempt = 0
+                    $runtime.RecoveryState = 'Idle'
+                    Set-AclServerRuntime -Profile $Profile -Server $server -Runtime $runtime -DataRoot $DataRoot
+                    $messages.Add([pscustomobject]@{ Server = $server; Message = "$server recovery attempts reset after the healthy period." })
+                }
+            }
+            elseif (-not [string]::IsNullOrWhiteSpace([string]$runtime.HealthySinceUtc)) {
+                $runtime.HealthySinceUtc = ''
+                Set-AclServerRuntime -Profile $Profile -Server $server -Runtime $runtime -DataRoot $DataRoot
+            }
+            continue
+        }
+
+        if ($runtime.RetryAttempt -ge $policy.MaxAttempts) {
+            if ($runtime.RecoveryState -ne 'Exhausted') {
+                $runtime.RecoveryState = 'Exhausted'
+                $runtime.NextRetryUtc = ''
+                $runtime.LastExitReason = 'Recovery retry limit reached'
+                Set-AclServerRuntime -Profile $Profile -Server $server -Runtime $runtime -DataRoot $DataRoot
+                $messages.Add([pscustomobject]@{ Server = $server; Message = "$server recovery canceled after $($policy.MaxAttempts) failed retry attempts." })
+            }
+            continue
+        }
+
+        $now = [DateTime]::UtcNow
+        $nextRetryUtc = $null
+        if (-not [string]::IsNullOrWhiteSpace([string]$runtime.NextRetryUtc)) {
+            try { $nextRetryUtc = ([DateTime]$runtime.NextRetryUtc).ToUniversalTime() } catch { $nextRetryUtc = $null }
+        }
+        if ($null -eq $nextRetryUtc) {
+            $delaySeconds = Get-AclRecoveryDelaySeconds -Policy $policy -Attempt $runtime.RetryAttempt
+            $nextRetryUtc = $now.AddSeconds($delaySeconds)
+            $runtime.ProcessId = $null
+            $runtime.State = 'RecoveryPending'
+            $runtime.LastExitReason = 'Process exited unexpectedly'
+            $runtime.RecoveryState = 'Pending'
+            $runtime.HealthySinceUtc = ''
+            $runtime.NextRetryUtc = $nextRetryUtc.ToString('o')
+            Set-AclServerRuntime -Profile $Profile -Server $server -Runtime $runtime -DataRoot $DataRoot
+            $messages.Add([pscustomobject]@{ Server = $server; Message = "$server exited unexpectedly. Recovery attempt $($runtime.RetryAttempt + 1) is pending at $($nextRetryUtc.ToLocalTime().ToString('T'))." })
+            continue
+        }
+
+        if ($now -lt $nextRetryUtc) {
+            continue
+        }
+
+        $blockedReason = if (-not $sqlOnline) { 'SQL is unavailable' } elseif ($server -eq 'Worldserver' -and -not $authOnline) { 'Authserver is not online' } else { '' }
+        if (-not [string]::IsNullOrWhiteSpace($blockedReason)) {
+            $delaySeconds = Get-AclRecoveryDelaySeconds -Policy $policy -Attempt $runtime.RetryAttempt
+            $runtime.NextRetryUtc = $now.AddSeconds($delaySeconds).ToString('o')
+            $runtime.RecoveryState = 'Waiting'
+            Set-AclServerRuntime -Profile $Profile -Server $server -Runtime $runtime -DataRoot $DataRoot
+            $messages.Add([pscustomobject]@{ Server = $server; Message = "$server recovery is waiting because $blockedReason. Next retry is at $(([DateTime]$runtime.NextRetryUtc).ToLocalTime().ToString('T'))." })
+            continue
+        }
+
+        try {
+            $nextAttempt = [int]$runtime.RetryAttempt + 1
+            $restartedRuntime = Start-AclServer -Profile $Profile -Server $server -DataRoot $DataRoot
+            $restartedRuntime.RetryAttempt = $nextAttempt
+            $restartedRuntime.RecoveryState = 'Recovering'
+            $restartedRuntime.NextRetryUtc = ''
+            Set-AclServerRuntime -Profile $Profile -Server $server -Runtime $restartedRuntime -DataRoot $DataRoot
+            $messages.Add([pscustomobject]@{ Server = $server; Message = "$server recovery retry $nextAttempt of $($policy.MaxAttempts) started." })
+            if ($server -eq 'Authserver') { $authOnline = $false }
+        }
+        catch {
+            $runtime.RetryAttempt = [int]$runtime.RetryAttempt + 1
+            $delaySeconds = Get-AclRecoveryDelaySeconds -Policy $policy -Attempt $runtime.RetryAttempt
+            $runtime.State = 'RecoveryPending'
+            $runtime.RecoveryState = 'Pending'
+            $runtime.NextRetryUtc = $now.AddSeconds($delaySeconds).ToString('o')
+            $runtime.LastExitReason = $_.Exception.Message
+            Set-AclServerRuntime -Profile $Profile -Server $server -Runtime $runtime -DataRoot $DataRoot
+            $messages.Add([pscustomobject]@{ Server = $server; Message = "$server recovery retry failed: $($_.Exception.Message). Next retry is at $(([DateTime]$runtime.NextRetryUtc).ToLocalTime().ToString('T'))." })
+        }
+    }
+
+    return $messages.ToArray()
 }
 
 function Wait-AclServerReady {
@@ -319,4 +490,4 @@ function Export-AclSupportSnapshot {
     }
 }
 
-Export-ModuleMember -Function Test-AclTcpEndpoint, Get-AclSqlServerStatus, Get-AclLatestConfiguredLogFile, Get-AclConfiguredLogTail, Get-AclRecentLogLine, Test-AclWorldserverReadiness, Get-AclServerHealth, Wait-AclServerReady, Start-AclAll, Stop-AclAll, Restart-AclAll, Export-AclSupportSnapshot
+Export-ModuleMember -Function Test-AclTcpEndpoint, Get-AclSqlServerStatus, Get-AclLatestConfiguredLogFile, Get-AclConfiguredLogTail, Get-AclRecentLogLine, Test-AclWorldserverReadiness, Get-AclServerHealth, Invoke-AclRecoverySupervisor, Wait-AclServerReady, Start-AclAll, Stop-AclAll, Restart-AclAll, Export-AclSupportSnapshot

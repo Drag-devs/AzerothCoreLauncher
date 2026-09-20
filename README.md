@@ -78,7 +78,9 @@ Both current-user logon and delayed system startup are supported. Task Scheduler
 
 The Recovery Settings dialog stores per-profile policy values for automatic recovery: enabled state, server scope, retry limit, initial delay, backoff multiplier, healthy reset period, and SQL prerequisite.
 
-The policy editor is available now. The background crash-restart supervisor is not yet active, so enabling recovery does not currently restart a crashed server.
+When enabled, the launcher detects unexpected managed-process exits and restarts the selected servers in a background job without blocking the WPF window. Retry state and the next retry time are stored in each server runtime record. Retries use bounded exponential backoff and reset after the configured healthy period.
+
+Recovery only acts on unexpected exits. Manual Stop cancels recovery for that server until it is started manually again. When configured, recovery waits for SQL availability; Worldserver also waits until Authserver is online, so Authserver always recovers first.
 
 ## Support Snapshot
 

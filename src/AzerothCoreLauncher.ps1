@@ -152,6 +152,7 @@ function Start-AclGui {
     @('ProfileSelector','NewProfileButton','EditProfileButton','ImportProfileButton','DeleteProfileButton','StartAllButton','StopAllButton','RestartAllButton','RecoverySettingsButton','SnapshotButton','AuthState','AuthDetails','AuthLog','WorldState','WorldDetails','WorldLog','StartAuthButton','StopAuthButton','RestartAuthButton','EditAuthConfigButton','StartWorldButton','StopWorldButton','RestartWorldButton','EditWorldConfigButton','SqlStatus','TaskStatus','ScheduledMode','ScheduledDelay','SaveTaskButton','RunTaskButton','RemoveTaskButton','OpenInstallButton','LogSelector','LogFilter','ManagerLog','ActivityText') | ForEach-Object { $controls[$_] = $window.FindName($_) }
     $activity = New-Object 'System.Collections.Generic.List[string]'
     $script:AclStartAllJob = $null
+    $script:AclRecoveryJob = $null
     $getProfile = { return $controls.ProfileSelector.SelectedItem }
     $renderLog = {
         $selection = $controls.LogSelector.SelectedItem
@@ -321,13 +322,13 @@ function Start-AclGui {
         Save-AclProfile -Profile $profile -DataRoot $script:DataRoot | Out-Null
         & $writeActivity "Saved recovery settings for '$($profile.Name)'."
     })
-    $controls.StopAllButton.Add_Click({ $profile = & $getProfile; & $invokeAction { Stop-AclAll -Profile $profile -DataRoot $script:DataRoot } 'Stopping all servers' })
+    $controls.StopAllButton.Add_Click({ $profile = & $getProfile; & $writeActivity 'Canceling automatic recovery for Authserver and Worldserver.'; & $invokeAction { Stop-AclAll -Profile $profile -DataRoot $script:DataRoot } 'Stopping all servers' })
     $controls.RestartAllButton.Add_Click({ $profile = & $getProfile; & $invokeAction { Restart-AclAll -Profile $profile -DataRoot $script:DataRoot } 'Restarting all servers' })
     $controls.StartAuthButton.Add_Click({ $profile = & $getProfile; & $invokeAction { Start-AclServer -Profile $profile -Server Authserver -DataRoot $script:DataRoot } 'Starting Authserver' })
-    $controls.StopAuthButton.Add_Click({ $profile = & $getProfile; & $invokeAction { Stop-AclServer -Profile $profile -Server Authserver -DataRoot $script:DataRoot } 'Stopping Authserver' })
+    $controls.StopAuthButton.Add_Click({ $profile = & $getProfile; & $writeActivity 'Canceling automatic recovery for Authserver.'; & $invokeAction { Stop-AclServer -Profile $profile -Server Authserver -DataRoot $script:DataRoot } 'Stopping Authserver' })
     $controls.RestartAuthButton.Add_Click({ $profile = & $getProfile; & $invokeAction { Restart-AclServer -Profile $profile -Server Authserver -DataRoot $script:DataRoot } 'Restarting Authserver' })
     $controls.StartWorldButton.Add_Click({ $profile = & $getProfile; & $invokeAction { Start-AclServer -Profile $profile -Server Worldserver -DataRoot $script:DataRoot } 'Starting Worldserver' })
-    $controls.StopWorldButton.Add_Click({ $profile = & $getProfile; & $invokeAction { Stop-AclServer -Profile $profile -Server Worldserver -DataRoot $script:DataRoot } 'Stopping Worldserver' })
+    $controls.StopWorldButton.Add_Click({ $profile = & $getProfile; & $writeActivity 'Canceling automatic recovery for Worldserver.'; & $invokeAction { Stop-AclServer -Profile $profile -Server Worldserver -DataRoot $script:DataRoot } 'Stopping Worldserver' })
     $controls.RestartWorldButton.Add_Click({ $profile = & $getProfile; & $invokeAction { Restart-AclServer -Profile $profile -Server Worldserver -DataRoot $script:DataRoot } 'Restarting Worldserver' })
     $controls.EditAuthConfigButton.Add_Click({ $profile = & $getProfile; if ($null -ne $profile) { Start-Process notepad.exe -ArgumentList ('"{0}"' -f $profile.AuthConfigPath) } })
     $controls.EditWorldConfigButton.Add_Click({ $profile = & $getProfile; if ($null -ne $profile) { Start-Process notepad.exe -ArgumentList ('"{0}"' -f $profile.WorldConfigPath) } })
@@ -350,6 +351,31 @@ function Start-AclGui {
             else { & $writeActivity "Ordered server startup ended: $jobOutput" }
             Remove-Job -Job $script:AclStartAllJob -Force
             $script:AclStartAllJob = $null
+        }
+        if ($null -ne $script:AclRecoveryJob -and $script:AclRecoveryJob.State -in @('Completed', 'Failed', 'Stopped')) {
+            $recoveryOutput = @(Receive-Job -Job $script:AclRecoveryJob -ErrorAction SilentlyContinue)
+            foreach ($recoveryMessage in $recoveryOutput) {
+                if ($null -ne $recoveryMessage -and -not [string]::IsNullOrWhiteSpace([string]$recoveryMessage.Message)) {
+                    & $writeActivity $recoveryMessage.Message
+                }
+            }
+            if ($script:AclRecoveryJob.State -ne 'Completed') {
+                & $writeActivity 'Automatic recovery supervisor ended unexpectedly.'
+            }
+            Remove-Job -Job $script:AclRecoveryJob -Force
+            $script:AclRecoveryJob = $null
+        }
+        $profile = & $getProfile
+        $recoveryEnabled = $null -ne $profile -and $null -ne $profile.PSObject.Properties['Recovery'] -and [bool]$profile.Recovery.Enabled
+        if ($null -eq $script:AclRecoveryJob -and $recoveryEnabled) {
+            $script:AclRecoveryJob = Start-Job -ArgumentList $profile, $script:DataRoot, $script:RootPath -ScriptBlock {
+                param($jobProfile, $jobDataRoot, $jobRootPath)
+                Import-Module (Join-Path $jobRootPath 'Modules\ProfileStore.psm1') -Force
+                Import-Module (Join-Path $jobRootPath 'Modules\AzerothConfig.psm1') -Force
+                Import-Module (Join-Path $jobRootPath 'Modules\ServerController.psm1') -Force
+                Import-Module (Join-Path $jobRootPath 'Modules\HealthMonitor.psm1') -Force
+                Invoke-AclRecoverySupervisor -Profile $jobProfile -DataRoot $jobDataRoot
+            }
         }
         & $refreshHealth; & $renderLog
     }); $timer.Start()

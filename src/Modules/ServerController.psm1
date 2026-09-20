@@ -196,6 +196,28 @@ function Clear-AclServerRuntime {
     Remove-Item -LiteralPath (Get-AclRuntimePath -Profile $Profile -Server $Server -DataRoot $DataRoot) -Force -ErrorAction SilentlyContinue
 }
 
+function Initialize-AclRecoveryRuntime {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [psobject]$Runtime
+    )
+
+    $defaults = @{
+        RecoveryCanceled = $false
+        RecoveryState = 'Idle'
+        RetryAttempt = 0
+        NextRetryUtc = ''
+        HealthySinceUtc = ''
+    }
+    foreach ($name in $defaults.Keys) {
+        if ($null -eq $Runtime.PSObject.Properties[$name]) {
+            $Runtime | Add-Member -NotePropertyName $name -NotePropertyValue $defaults[$name]
+        }
+    }
+    return $Runtime
+}
+
 function Get-AclProcessByExecutable {
     [CmdletBinding()]
     param(
@@ -296,6 +318,11 @@ function Start-AclServer {
         StartedUtc = [DateTime]::UtcNow.ToString('o')
         IntentionalStop = $false
         LastExitReason = ''
+        RecoveryCanceled = $false
+        RecoveryState = 'Idle'
+        RetryAttempt = 0
+        NextRetryUtc = ''
+        HealthySinceUtc = ''
     }
     Set-AclServerRuntime -Profile $Profile -Server $Server -Runtime $runtime -DataRoot $DataRoot
     return $runtime
@@ -320,17 +347,42 @@ function Stop-AclServer {
 
     $runtime = Get-AclServerRuntime -Profile $Profile -Server $Server -DataRoot $DataRoot
     if ($null -eq $runtime) {
-        return [pscustomobject]@{ Server = $Server; State = 'Stopped'; Message = 'No managed process is running.' }
+        $runtime = [pscustomobject]@{
+            ProcessId = $null
+            State = 'Stopped'
+            StartedUtc = ''
+            IntentionalStop = $true
+            LastExitReason = 'Manual stop'
+            RecoveryCanceled = $true
+            RecoveryState = 'Canceled'
+            RetryAttempt = 0
+            NextRetryUtc = ''
+            HealthySinceUtc = ''
+        }
+        Set-AclServerRuntime -Profile $Profile -Server $Server -Runtime $runtime -DataRoot $DataRoot
+        return [pscustomobject]@{ Server = $Server; State = 'Stopped'; Message = 'No managed process is running. Automatic recovery is canceled until manual start.' }
     }
 
-    $process = Get-Process -Id $runtime.ProcessId -ErrorAction SilentlyContinue
+    $runtime = Initialize-AclRecoveryRuntime -Runtime $runtime
+
+    $process = if ($null -ne $runtime.ProcessId) { Get-Process -Id $runtime.ProcessId -ErrorAction SilentlyContinue } else { $null }
     if ($null -eq $process) {
-        Clear-AclServerRuntime -Profile $Profile -Server $Server -DataRoot $DataRoot
-        return [pscustomobject]@{ Server = $Server; State = 'Stopped'; Message = 'Process was already stopped.' }
+        $runtime.ProcessId = $null
+        $runtime.State = 'Stopped'
+        $runtime.IntentionalStop = $true
+        $runtime.LastExitReason = 'Manual stop'
+        $runtime.RecoveryCanceled = $true
+        $runtime.RecoveryState = 'Canceled'
+        $runtime.NextRetryUtc = ''
+        Set-AclServerRuntime -Profile $Profile -Server $Server -Runtime $runtime -DataRoot $DataRoot
+        return [pscustomobject]@{ Server = $Server; State = 'Stopped'; Message = 'Process was already stopped. Automatic recovery is canceled until manual start.' }
     }
 
     $runtime.State = 'Stopping'
     $runtime.IntentionalStop = $true
+    $runtime.RecoveryCanceled = $true
+    $runtime.RecoveryState = 'Canceled'
+    $runtime.NextRetryUtc = ''
     Set-AclServerRuntime -Profile $Profile -Server $Server -Runtime $runtime -DataRoot $DataRoot
 
     if (-not $Force) {
@@ -339,14 +391,20 @@ function Stop-AclServer {
         if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
             return [pscustomobject]@{ Server = $Server; State = 'Stopping'; Message = 'Graceful shutdown timed out. Use force stop to terminate the process.' }
         }
-        Clear-AclServerRuntime -Profile $Profile -Server $Server -DataRoot $DataRoot
-        return [pscustomobject]@{ Server = $Server; State = 'Stopped'; Message = 'Stopped gracefully.' }
+        $runtime.ProcessId = $null
+        $runtime.State = 'Stopped'
+        $runtime.LastExitReason = 'Manual stop'
+        Set-AclServerRuntime -Profile $Profile -Server $Server -Runtime $runtime -DataRoot $DataRoot
+        return [pscustomobject]@{ Server = $Server; State = 'Stopped'; Message = 'Stopped gracefully. Automatic recovery is canceled until manual start.' }
     }
 
     $process.Kill()
     $process.WaitForExit()
-    Clear-AclServerRuntime -Profile $Profile -Server $Server -DataRoot $DataRoot
-    return [pscustomobject]@{ Server = $Server; State = 'Force-stopped'; Message = 'Process terminated.' }
+    $runtime.ProcessId = $null
+    $runtime.State = 'Stopped'
+    $runtime.LastExitReason = 'Manual force stop'
+    Set-AclServerRuntime -Profile $Profile -Server $Server -Runtime $runtime -DataRoot $DataRoot
+    return [pscustomobject]@{ Server = $Server; State = 'Force-stopped'; Message = 'Process terminated. Automatic recovery is canceled until manual start.' }
 }
 
 function Restart-AclServer {
@@ -371,4 +429,4 @@ function Restart-AclServer {
     return (Start-AclServer -Profile $Profile -Server $Server -DataRoot $DataRoot)
 }
 
-Export-ModuleMember -Function Get-AclServerRuntime, Set-AclServerRuntime, Test-AclServerPreflight, Start-AclServer, Stop-AclServer, Restart-AclServer, Get-AclProcessByExecutable
+Export-ModuleMember -Function Get-AclServerRuntime, Set-AclServerRuntime, Initialize-AclRecoveryRuntime, Test-AclServerPreflight, Start-AclServer, Stop-AclServer, Restart-AclServer, Get-AclProcessByExecutable
