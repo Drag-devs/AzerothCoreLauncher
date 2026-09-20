@@ -1,0 +1,156 @@
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="AzerothCore Launcher" Height="820" Width="1050" MinHeight="700" MinWidth="850"
+        Background="#F4F7F8" FontFamily="Segoe UI" WindowStartupLocation="CenterScreen">
+    <Window.Resources>
+        <Style TargetType="Button">
+            <Setter Property="Margin" Value="4" />
+            <Setter Property="Padding" Value="10,5" />
+            <Setter Property="MinHeight" Value="30" />
+            <Style.Triggers>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Foreground" Value="#202020" />
+                    <Setter Property="Opacity" Value="1" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="PanelBorder" TargetType="Border">
+            <Setter Property="Background" Value="White" />
+            <Setter Property="BorderBrush" Value="#D3DCE0" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Padding" Value="12" />
+            <Setter Property="Margin" Value="6" />
+        </Style>
+    </Window.Resources>
+    <DockPanel LastChildFill="True">
+        <Border DockPanel.Dock="Top" Background="#1E4F5F" Padding="16">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0">
+                    <TextBlock Text="AZEROTHCORE" Foreground="#E9F2F3" FontWeight="SemiBold" FontSize="18" />
+                    <TextBlock Text="AzerothCore Launcher" Foreground="#BFD5D9" FontSize="12" />
+                </StackPanel>
+                <ComboBox x:Name="ProfileSelector" Grid.Column="1" Margin="24,0,8,0" MinWidth="260" VerticalContentAlignment="Center" DisplayMemberPath="Name" />
+                <StackPanel Grid.Column="2" Orientation="Horizontal">
+                    <Button x:Name="NewProfileButton" Content="New" ToolTip="Create a server profile" />
+                    <Button x:Name="EditProfileButton" Content="Edit" ToolTip="Edit the selected server profile" />
+                    <Button x:Name="ImportProfileButton" Content="Import" ToolTip="Import a profile JSON file" />
+                    <Button x:Name="DeleteProfileButton" Content="Delete" ToolTip="Delete the selected server profile" />
+                </StackPanel>
+            </Grid>
+        </Border>
+        <Border DockPanel.Dock="Bottom" Background="#E5ECEE" Padding="8">
+            <TextBlock x:Name="ActivityText" Text="Select a profile to begin." Foreground="#243E45" />
+        </Border>
+        <Grid Margin="12">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+            <Border Grid.Row="0" Style="{StaticResource PanelBorder}">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <TextBlock Text="Server Control" FontSize="18" FontWeight="SemiBold" Foreground="#1E4F5F" />
+                        <TextBlock Text="Authserver starts before Worldserver. Stop operations run in reverse order." Foreground="#52686E" Margin="0,4,0,0" />
+                        <TextBlock x:Name="SqlStatus" Text="SQL: Checking configured database ports..." Foreground="#52686E" Margin="0,4,0,0" />
+                    </StackPanel>
+                    <WrapPanel Grid.Column="1" VerticalAlignment="Center">
+                        <Button x:Name="StartAllButton" Content="Start All" Background="#2E7D5B" Foreground="White" />
+                        <Button x:Name="StopAllButton" Content="Stop All" />
+                        <Button x:Name="RestartAllButton" Content="Restart All" />
+                        <Button x:Name="RecoverySettingsButton" Content="Recovery Settings" ToolTip="Configure automatic crash recovery" />
+                        <Button x:Name="SnapshotButton" Content="Export Snapshot" ToolTip="Export a redacted support snapshot" />
+                    </WrapPanel>
+                </Grid>
+            </Border>
+            <Grid Grid.Row="1">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Border Grid.Column="0" Style="{StaticResource PanelBorder}">
+                    <StackPanel>
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                            <TextBlock Text="Authserver" FontSize="18" FontWeight="SemiBold" Foreground="#1E4F5F" />
+                            <TextBlock x:Name="AuthState" Grid.Column="1" Text="Stopped" FontWeight="SemiBold" Foreground="#687A80" />
+                        </Grid>
+                        <TextBlock x:Name="AuthDetails" Text="No profile selected." Foreground="#52686E" Margin="0,8,0,0" TextWrapping="Wrap" />
+                        <TextBlock x:Name="AuthLog" Text="" Foreground="#73878C" Margin="0,8,0,0" TextWrapping="Wrap" MaxHeight="42" />
+                        <WrapPanel Margin="-4,10,0,0">
+                            <Button x:Name="StartAuthButton" Content="Start" />
+                            <Button x:Name="StopAuthButton" Content="Stop" />
+                            <Button x:Name="RestartAuthButton" Content="Restart" />
+                            <Button x:Name="EditAuthConfigButton" Content="Edit Config" />
+                        </WrapPanel>
+                    </StackPanel>
+                </Border>
+                <Border Grid.Column="1" Style="{StaticResource PanelBorder}">
+                    <StackPanel>
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                            <TextBlock Text="Worldserver" FontSize="18" FontWeight="SemiBold" Foreground="#1E4F5F" />
+                            <TextBlock x:Name="WorldState" Grid.Column="1" Text="Stopped" FontWeight="SemiBold" Foreground="#687A80" />
+                        </Grid>
+                        <TextBlock x:Name="WorldDetails" Text="No profile selected." Foreground="#52686E" Margin="0,8,0,0" TextWrapping="Wrap" />
+                        <TextBlock x:Name="WorldLog" Text="" Foreground="#73878C" Margin="0,8,0,0" TextWrapping="Wrap" MaxHeight="42" />
+                        <WrapPanel Margin="-4,10,0,0">
+                            <Button x:Name="StartWorldButton" Content="Start" />
+                            <Button x:Name="StopWorldButton" Content="Stop" />
+                            <Button x:Name="RestartWorldButton" Content="Restart" />
+                            <Button x:Name="EditWorldConfigButton" Content="Edit Config" />
+                        </WrapPanel>
+                    </StackPanel>
+                </Border>
+            </Grid>
+            <Border Grid.Row="2" Style="{StaticResource PanelBorder}">
+                <StackPanel>
+                    <TextBlock Text="Scheduled Startup" FontSize="18" FontWeight="SemiBold" Foreground="#1E4F5F" />
+                    <TextBlock x:Name="TaskStatus" Text="No scheduled startup configured." Foreground="#52686E" Margin="0,4,0,8" />
+                    <WrapPanel>
+                        <ComboBox x:Name="ScheduledMode" Width="180" Margin="4" SelectedIndex="0">
+                            <ComboBoxItem Content="CurrentUserLogon" />
+                            <ComboBoxItem Content="SystemStartup" />
+                        </ComboBox>
+                        <TextBox x:Name="ScheduledDelay" Width="70" Text="30" Margin="4" VerticalContentAlignment="Center" ToolTip="Startup delay in seconds" />
+                        <Button x:Name="SaveTaskButton" Content="Create or Update" />
+                        <Button x:Name="RunTaskButton" Content="Run Now" />
+                        <Button x:Name="RemoveTaskButton" Content="Remove" />
+                    </WrapPanel>
+                </StackPanel>
+            </Border>
+            <Border Grid.Row="3" Style="{StaticResource PanelBorder}" MinHeight="140">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <Grid Grid.Row="0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="260" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Activity Log" FontSize="18" FontWeight="SemiBold" Foreground="#1E4F5F" />
+                        <ComboBox x:Name="LogSelector" Grid.Column="1" Margin="4" DisplayMemberPath="DisplayName" ToolTip="Select manager activity or a configured server log" />
+                        <Button x:Name="OpenInstallButton" Grid.Column="2" Content="Open Install Folder" />
+                    </Grid>
+                    <TextBox x:Name="LogFilter" Grid.Row="1" Margin="0,8,0,4" ToolTip="Filter the selected activity or server log" />
+                    <TextBox x:Name="ManagerLog" Grid.Row="2" IsReadOnly="True" TextWrapping="NoWrap" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="12" />
+                </Grid>
+            </Border>
+        </Grid>
+    </DockPanel>
+</Window>
