@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('Gui', 'StartAll', 'StopAll', 'RestartAll', 'StartAuthserver', 'StopAuthserver', 'RestartAuthserver', 'StartWorldserver', 'StopWorldserver', 'RestartWorldserver', 'Preflight')]
+    [ValidateSet('Gui', 'ScheduledStart', 'StartAll', 'Supervise', 'StopAll', 'RestartAll', 'StartAuthserver', 'StopAuthserver', 'RestartAuthserver', 'StartWorldserver', 'StopWorldserver', 'RestartWorldserver', 'Preflight')]
     [string]$Action = 'Gui',
 
     [string]$ProfileId
@@ -51,7 +51,37 @@ function Invoke-AclAction {
     param([psobject]$Profile, [string]$RequestedAction)
 
     switch ($RequestedAction) {
+        'ScheduledStart' {
+            if ((Get-AclRecoveryPolicy -Profile $Profile).Enabled) {
+                return Invoke-AclAction -Profile $Profile -RequestedAction Supervise
+            }
+            return Start-AclAll -Profile $Profile -DataRoot $script:DataRoot
+        }
         'StartAll' { return Start-AclAll -Profile $Profile -DataRoot $script:DataRoot }
+        'Supervise' {
+            $policy = Get-AclRecoveryPolicy -Profile $Profile
+            if (-not $policy.Enabled) { return Start-AclAll -Profile $Profile -DataRoot $script:DataRoot }
+            foreach ($server in @('Authserver', 'Worldserver')) {
+                $health = Get-AclServerHealth -Profile $Profile -Server $server -DataRoot $script:DataRoot
+                if ($health.State -eq 'Online') { continue }
+                if ($health.State -in @('Starting', 'Degraded')) {
+                    Wait-AclServerReady -Profile $Profile -Server $server -DataRoot $script:DataRoot | Out-Null
+                }
+                else {
+                    Start-AclServer -Profile $Profile -Server $server -DataRoot $script:DataRoot | Out-Null
+                    Wait-AclServerReady -Profile $Profile -Server $server -DataRoot $script:DataRoot | Out-Null
+                }
+            }
+            $supervisorLog = Join-Path (Join-Path $script:DataRoot 'Logs') ("supervisor-{0}.log" -f [Uri]::EscapeDataString([string]$Profile.Id))
+            while ($true) {
+                foreach ($message in @(Invoke-AclRecoverySupervisor -Profile $Profile -DataRoot $script:DataRoot)) {
+                    if ($null -ne $message -and -not [string]::IsNullOrWhiteSpace([string]$message.Message)) {
+                        Add-Content -LiteralPath $supervisorLog -Value ("{0:o}`t{1}" -f [DateTime]::UtcNow, $message.Message) -Encoding UTF8
+                    }
+                }
+                Start-Sleep -Seconds 3
+            }
+        }
         'StopAll' { return Stop-AclAll -Profile $Profile -DataRoot $script:DataRoot }
         'RestartAll' { return Restart-AclAll -Profile $Profile -DataRoot $script:DataRoot }
         'StartAuthserver' { return Start-AclServer -Profile $Profile -Server Authserver -DataRoot $script:DataRoot }

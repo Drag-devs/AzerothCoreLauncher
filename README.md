@@ -14,7 +14,16 @@ src\
 data\
 ```
 
-`data\` is created automatically and stores launcher-owned profiles, runtime records, logs, and support snapshots. AzerothCore server configs remain in the server install selected by each profile.
+`data\` is created automatically and contains:
+
+```text
+data\Profiles\     Profile JSON files
+data\Runtime\      Per-server process and recovery state
+data\Logs\         Launcher, supervisor, and action-result logs
+data\Snapshots\    Exported support ZIP files
+```
+
+AzerothCore server configs remain in the server install selected by each profile.
 
 ## Run
 
@@ -32,6 +41,26 @@ Or run the source script with Windows PowerShell 5.1 or later:
 
 The launcher sets execution policy bypass for its own process before importing its modules. Group Policy can still override this behavior.
 
+### Command Actions
+
+The script and executable accept these actions with a profile ID:
+
+```text
+-Action StartAll -ProfileId <profile-id>
+-Action Supervise -ProfileId <profile-id>
+-Action StopAll -ProfileId <profile-id>
+-Action RestartAll -ProfileId <profile-id>
+-Action StartAuthserver -ProfileId <profile-id>
+-Action StopAuthserver -ProfileId <profile-id>
+-Action RestartAuthserver -ProfileId <profile-id>
+-Action StartWorldserver -ProfileId <profile-id>
+-Action StopWorldserver -ProfileId <profile-id>
+-Action RestartWorldserver -ProfileId <profile-id>
+-Action Preflight -ProfileId <profile-id>
+```
+
+Non-GUI action results are saved under `data\Logs\action-<Action>-<profile-id>.json`. The next execution of the same action for the same profile overwrites that file. Preflight results include validation state and errors without full configuration settings.
+
 ## Profiles
 
 Create a profile for each AzerothCore install. Use **Browse** to select either the executable directory or a parent directory; the launcher finds the folder containing both server executables and fills:
@@ -46,7 +75,7 @@ Profiles can be edited, imported, or deleted. Deletion removes the profile's lau
 ## Server Controls
 
 - **Start All** starts Authserver first, then waits for it to become healthy before starting Worldserver.
-- Startup has no readiness timeout. A server remains `Starting` until it is online or actually fails.
+- Startup waits for readiness until a server becomes online or reports an actual failure.
 - **Stop All** stops Worldserver before Authserver.
 - Individual Start, Stop, and Restart controls are available for both servers.
 - Start actions are disabled when configured SQL endpoints are unavailable.
@@ -64,25 +93,40 @@ The launcher parses each profile's `LogsDir`, `Appender.*`, and `Logger.root` co
 - The selected log has its own scrollbars and remains visible during health refreshes.
 - SQL status monitors the host and port values in `LoginDatabaseInfo`, `WorldDatabaseInfo`, and `CharacterDatabaseInfo`.
 
-## Scheduled Startup
+## Scheduled Startup and Supervision
 
-Scheduled startup is per profile. The task starts the selected profile with:
+Scheduled startup is per profile:
 
 ```text
--Action StartAll -ProfileId <profile-id>
+-Action ScheduledStart -ProfileId <profile-id>
 ```
 
-This action starts the server resources for the selected profile without opening the launcher UI. Both current-user logon and delayed system startup are supported. Task Scheduler operations request UAC elevation only when required; the normal launcher does not run elevated.
+`ScheduledStart` reads the current profile recovery policy when the task runs. With recovery disabled it starts the selected profile's servers in order and exits after startup. With recovery enabled it starts the servers in order and remains running to apply the recovery policy. Neither mode opens the launcher UI.
 
-Non-GUI action results are saved to `data\Logs\action-<Action>-<profile-id>.json` instead of being sent to the compiled GUI host. Later runs of the same action/profile overwrite that result file. Preflight results contain validity and errors, not the full server configuration. Startup waits and automatic-recovery behavior are unchanged by result logging.
+Both current-user logon and delayed system startup are supported. Task Scheduler operations request UAC elevation only when required. The normal launcher does not run elevated.
+
+Supervisor events are written to:
+
+```text
+data\Logs\supervisor-<profile-id>.log
+```
 
 ## Recovery Settings
 
-The Recovery Settings dialog stores per-profile policy values for automatic recovery: enabled state, server scope, retry limit, initial delay, backoff multiplier, healthy reset period, and SQL prerequisite.
+The **Recovery Settings** dialog stores per-profile policy values:
 
-When enabled, the launcher detects unexpected managed-process exits and restarts the selected servers in a background job without blocking the WPF window. Retry state and the next retry time are stored in each server runtime record. Retries use bounded exponential backoff and reset after the configured healthy period.
+- Enable automatic recovery
+- Recover Authserver
+- Recover Worldserver
+- Maximum consecutive restart attempts: 1 to 20
+- Initial retry delay: 1 to 300 seconds
+- Backoff multiplier: 1 to 5
+- Healthy reset period: 1 to 1440 minutes
+- Require configured SQL endpoints to be online
 
-Recovery only acts on unexpected exits. Manual Stop cancels recovery for that server until it is started manually again. When configured, recovery waits for SQL availability; Worldserver also waits until Authserver is online, so Authserver always recovers first.
+When enabled, the launcher detects unexpected managed-process exits and restarts selected servers with bounded exponential backoff. Retry attempt count, next retry time, health time, cancellation state, and recovery state are stored in each server runtime record.
+
+Recovery only acts on unexpected exits. Manual Stop cancels recovery for that server until it is started manually again. When SQL gating is enabled, recovery waits for configured SQL endpoints. Worldserver recovery waits for Authserver to be online.
 
 ## Support Snapshot
 
@@ -99,3 +143,5 @@ The project is built with [ps2exe](https://www.powershellgallery.com/packages/ps
 The script installs `ps2exe` for the current user if it is missing, compiles `src\AzerothCoreLauncher.ps1`, applies `assets\AzerothCoreLauncher.ico`, and overwrites `AzerothCoreLauncher.exe` in the same folder.
 
 Close the launcher before rebuilding, because Windows locks a running EXE.
+
+The rebuilt EXE and the `src\` and `data\` folders form one portable distribution.

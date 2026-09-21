@@ -64,13 +64,14 @@ function New-AclScheduledTaskXml {
     $launcherPath = [IO.Path]::GetFullPath($ScriptPath)
     $escapedLauncherPath = ConvertTo-AclXmlEscapedText -Value $launcherPath
     $escapedProfileId = ConvertTo-AclXmlEscapedText -Value $Profile.Id
+    $action = 'ScheduledStart'
     if ([IO.Path]::GetExtension($launcherPath) -ieq '.exe') {
         $command = $escapedLauncherPath
-        $arguments = "-Action StartAll -ProfileId `"$escapedProfileId`""
+        $arguments = "-Action $action -ProfileId `"$escapedProfileId`""
     }
     else {
         $command = 'powershell.exe'
-        $arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$escapedLauncherPath`" -Action StartAll -ProfileId `"$escapedProfileId`""
+        $arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$escapedLauncherPath`" -Action $action -ProfileId `"$escapedProfileId`""
     }
     $delay = "PT{0}S" -f $DelaySeconds
     $trigger = if ($Mode -eq 'SystemStartup') {

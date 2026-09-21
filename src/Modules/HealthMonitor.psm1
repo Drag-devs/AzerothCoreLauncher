@@ -202,7 +202,22 @@ function Get-AclServerHealth {
         $runtime.State = 'Online'
         Set-AclServerRuntime -Profile $Profile -Server $Server -Runtime $runtime -DataRoot $DataRoot
     }
-    $uptime = ([DateTime]::Now).Subtract([DateTime]$process.StartTime)
+    $uptime = $null
+    try {
+        $processStartTime = $process.StartTime
+        if ($null -ne $processStartTime) {
+            $uptime = [DateTime]::UtcNow.Subtract(([DateTime]$processStartTime).ToUniversalTime())
+        }
+    }
+    catch {
+        $uptime = $null
+    }
+    if ($null -eq $uptime -and $null -ne $runtime.PSObject.Properties['StartedUtc']) {
+        $recordedStartTime = [DateTime]::MinValue
+        if ([DateTime]::TryParse([string]$runtime.StartedUtc, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind, [ref]$recordedStartTime)) {
+            $uptime = [DateTime]::UtcNow.Subtract($recordedStartTime.ToUniversalTime())
+        }
+    }
 
     return [pscustomobject]@{
         Server = $Server
@@ -497,4 +512,4 @@ function Export-AclSupportSnapshot {
     }
 }
 
-Export-ModuleMember -Function Test-AclTcpEndpoint, Get-AclSqlServerStatus, Get-AclLatestConfiguredLogFile, Get-AclConfiguredLogTail, Get-AclRecentLogLine, Test-AclWorldserverReadiness, Get-AclServerHealth, Invoke-AclRecoverySupervisor, Wait-AclServerReady, Start-AclAll, Stop-AclAll, Restart-AclAll, Export-AclSupportSnapshot
+Export-ModuleMember -Function Test-AclTcpEndpoint, Get-AclSqlServerStatus, Get-AclLatestConfiguredLogFile, Get-AclConfiguredLogTail, Get-AclRecentLogLine, Test-AclWorldserverReadiness, Get-AclServerHealth, Get-AclRecoveryPolicy, Invoke-AclRecoverySupervisor, Wait-AclServerReady, Start-AclAll, Stop-AclAll, Restart-AclAll, Export-AclSupportSnapshot
