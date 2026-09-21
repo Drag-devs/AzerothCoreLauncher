@@ -99,13 +99,3 @@ The project is built with [ps2exe](https://www.powershellgallery.com/packages/ps
 The script installs `ps2exe` for the current user if it is missing, compiles `src\AzerothCoreLauncher.ps1`, applies `assets\AzerothCoreLauncher.ico`, and overwrites `AzerothCoreLauncher.exe` in the same folder.
 
 Close the launcher before rebuilding, because Windows locks a running EXE.
-
-## Serialization Regression Check
-
-Run the regression check in Windows PowerShell 5.1, where `Get-Content` attaches provider metadata to strings:
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-LogSerialization.ps1
-```
-
-This checks that log-reader output is plain text before deep JSON serialization and that automation writes results to a file without exposing config credentials or emitting host output. It uses disposable configs and placeholder executables; it does not start AzerothCore or register scheduled tasks.
