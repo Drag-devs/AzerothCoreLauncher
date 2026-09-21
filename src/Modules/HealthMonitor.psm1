@@ -95,7 +95,8 @@ function Get-AclConfiguredLogTail {
     if ($null -eq $logFile) {
         return @()
     }
-    return @(Get-Content -LiteralPath $logFile.FullName -Tail $TailLines -ErrorAction SilentlyContinue)
+    return @(Get-Content -LiteralPath $logFile.FullName -Tail $TailLines -ErrorAction SilentlyContinue |
+        ForEach-Object { $_.ToString() })
 }
 
 function Get-AclRecentLogLine {
@@ -126,7 +127,7 @@ function Get-AclRecentLogLine {
     if ($meaningfulLines.Count -eq 0) {
         return ''
     }
-    return $meaningfulLines[-1]
+    return $meaningfulLines[-1].ToString()
 }
 
 function Test-AclWorldserverReadiness {
@@ -167,10 +168,15 @@ function Get-AclServerHealth {
         [ValidateSet('Authserver', 'Worldserver')]
         [string]$Server,
 
+        [psobject]$Definition,
+
         [string]$DataRoot = (Get-AclDataRoot)
     )
 
-    $definition = Get-AzerothServerDefinition -Profile $Profile -Server $Server
+    if ($null -eq $Definition) {
+        $Definition = Get-AzerothServerDefinition -Profile $Profile -Server $Server
+    }
+    $definition = $Definition
     $runtime = Get-AclServerRuntime -Profile $Profile -Server $Server -DataRoot $DataRoot
     $processes = @()
     if ($null -ne $runtime -and $null -ne $runtime.ProcessId) {
@@ -396,11 +402,12 @@ function Wait-AclServerReady {
         [string]$DataRoot = (Get-AclDataRoot)
     )
 
+    $definition = Get-AzerothServerDefinition -Profile $Profile -Server $Server
     while ($true) {
-        $health = Get-AclServerHealth -Profile $Profile -Server $Server -DataRoot $DataRoot
+        $health = Get-AclServerHealth -Profile $Profile -Server $Server -Definition $definition -DataRoot $DataRoot
         if ($health.State -eq 'Online') { return $health }
         if ($health.State -eq 'Failed') { throw "$Server failed to start: $($health.Message)" }
-        Start-Sleep -Milliseconds 500
+        Start-Sleep -Seconds 2
     }
 }
 

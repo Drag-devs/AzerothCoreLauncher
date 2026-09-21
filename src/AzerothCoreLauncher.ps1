@@ -3,9 +3,7 @@ param(
     [ValidateSet('Gui', 'StartAll', 'StopAll', 'RestartAll', 'StartAuthserver', 'StopAuthserver', 'RestartAuthserver', 'StartWorldserver', 'StopWorldserver', 'RestartWorldserver', 'Preflight')]
     [string]$Action = 'Gui',
 
-    [string]$ProfileId,
-
-    [switch]$Headless
+    [string]$ProfileId
 )
 
 Set-StrictMode -Version Latest
@@ -49,7 +47,7 @@ function Get-AclSelectedProfile {
     return $profile
 }
 
-function Invoke-AclHeadlessAction {
+function Invoke-AclAction {
     param([psobject]$Profile, [string]$RequestedAction)
 
     switch ($RequestedAction) {
@@ -68,7 +66,7 @@ function Invoke-AclHeadlessAction {
                 Worldserver = Test-AclServerPreflight -Profile $Profile -Server Worldserver
             }
         }
-        default { throw "Unsupported headless action '$RequestedAction'." }
+        default { throw "Unsupported action '$RequestedAction'." }
     }
 }
 
@@ -382,10 +380,20 @@ function Start-AclGui {
     [void]$window.ShowDialog(); $timer.Stop()
 }
 
-if ($Action -eq 'Gui' -and -not $Headless) {
+if ($Action -eq 'Gui') {
     Start-AclGui
 }
 else {
     $profile = Get-AclSelectedProfile -RequestedProfileId $ProfileId
-    Invoke-AclHeadlessAction -Profile $profile -RequestedAction $Action | ConvertTo-Json -Depth 8
+    $result = Invoke-AclAction -Profile $profile -RequestedAction $Action
+    if ($Action -eq 'Preflight') {
+        $result = [pscustomobject]@{
+            Authserver = $result.Authserver | Select-Object IsValid, Errors
+            Worldserver = $result.Worldserver | Select-Object IsValid, Errors
+        }
+    }
+    $resultJson = $result | ConvertTo-Json -Depth 8
+    $resultName = 'action-{0}-{1}.json' -f $Action, [Uri]::EscapeDataString([string]$profile.Id)
+    $resultPath = Join-Path (Join-Path $script:DataRoot 'Logs') $resultName
+    [IO.File]::WriteAllText($resultPath, $resultJson, [Text.UTF8Encoding]::new($false))
 }

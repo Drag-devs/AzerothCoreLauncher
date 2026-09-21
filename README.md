@@ -69,10 +69,12 @@ The launcher parses each profile's `LogsDir`, `Appender.*`, and `Logger.root` co
 Scheduled startup is per profile. The task starts the selected profile with:
 
 ```text
--Action StartAll -ProfileId <profile-id> -Headless
+-Action StartAll -ProfileId <profile-id>
 ```
 
-Both current-user logon and delayed system startup are supported. Task Scheduler operations request UAC elevation only when required; the normal launcher does not run elevated.
+This action starts the server resources for the selected profile without opening the launcher UI. Both current-user logon and delayed system startup are supported. Task Scheduler operations request UAC elevation only when required; the normal launcher does not run elevated.
+
+Non-GUI action results are saved to `data\Logs\action-<Action>-<profile-id>.json` instead of being sent to the compiled GUI host. Later runs of the same action/profile overwrite that result file. Preflight results contain validity and errors, not the full server configuration. Startup waits and automatic-recovery behavior are unchanged by result logging.
 
 ## Recovery Settings
 
@@ -97,3 +99,13 @@ The project is built with [ps2exe](https://www.powershellgallery.com/packages/ps
 The script installs `ps2exe` for the current user if it is missing, compiles `src\AzerothCoreLauncher.ps1`, applies `assets\AzerothCoreLauncher.ico`, and overwrites `AzerothCoreLauncher.exe` in the same folder.
 
 Close the launcher before rebuilding, because Windows locks a running EXE.
+
+## Serialization Regression Check
+
+Run the regression check in Windows PowerShell 5.1, where `Get-Content` attaches provider metadata to strings:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-LogSerialization.ps1
+```
+
+This checks that log-reader output is plain text before deep JSON serialization and that automation writes results to a file without exposing config credentials or emitting host output. It uses disposable configs and placeholder executables; it does not start AzerothCore or register scheduled tasks.
