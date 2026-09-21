@@ -61,23 +61,37 @@ function Invoke-AclAction {
         'Supervise' {
             $policy = Get-AclRecoveryPolicy -Profile $Profile
             if (-not $policy.Enabled) { return Start-AclAll -Profile $Profile -DataRoot $script:DataRoot }
-            foreach ($server in @('Authserver', 'Worldserver')) {
-                $health = Get-AclServerHealth -Profile $Profile -Server $server -DataRoot $script:DataRoot
-                if ($health.State -eq 'Online') { continue }
-                if ($health.State -in @('Starting', 'Degraded')) {
-                    Wait-AclServerReady -Profile $Profile -Server $server -DataRoot $script:DataRoot | Out-Null
-                }
-                else {
-                    Start-AclServer -Profile $Profile -Server $server -DataRoot $script:DataRoot | Out-Null
-                    Wait-AclServerReady -Profile $Profile -Server $server -DataRoot $script:DataRoot | Out-Null
+            $supervisorLog = Join-Path (Join-Path $script:DataRoot 'Logs') ("supervisor-{0}.log" -f [Uri]::EscapeDataString([string]$Profile.Id))
+            $writeSupervisorMessage = {
+                param([string]$Message)
+                try { Add-Content -LiteralPath $supervisorLog -Value ("{0:o}`t{1}" -f [DateTime]::UtcNow, $Message) -Encoding UTF8 } catch { }
+            }
+            try {
+                foreach ($server in @('Authserver', 'Worldserver')) {
+                    $health = Get-AclServerHealth -Profile $Profile -Server $server -DataRoot $script:DataRoot
+                    if ($health.State -eq 'Online') { continue }
+                    if ($health.State -in @('Starting', 'Degraded')) {
+                        Wait-AclServerReady -Profile $Profile -Server $server -DataRoot $script:DataRoot | Out-Null
+                    }
+                    else {
+                        Start-AclServer -Profile $Profile -Server $server -DataRoot $script:DataRoot | Out-Null
+                        Wait-AclServerReady -Profile $Profile -Server $server -DataRoot $script:DataRoot | Out-Null
+                    }
                 }
             }
-            $supervisorLog = Join-Path (Join-Path $script:DataRoot 'Logs') ("supervisor-{0}.log" -f [Uri]::EscapeDataString([string]$Profile.Id))
+            catch {
+                & $writeSupervisorMessage "Initial startup did not complete: $($_.Exception.Message). Entering recovery supervision."
+            }
             while ($true) {
-                foreach ($message in @(Invoke-AclRecoverySupervisor -Profile $Profile -DataRoot $script:DataRoot)) {
-                    if ($null -ne $message -and -not [string]::IsNullOrWhiteSpace([string]$message.Message)) {
-                        Add-Content -LiteralPath $supervisorLog -Value ("{0:o}`t{1}" -f [DateTime]::UtcNow, $message.Message) -Encoding UTF8
+                try {
+                    foreach ($message in @(Invoke-AclRecoverySupervisor -Profile $Profile -DataRoot $script:DataRoot)) {
+                        if ($null -ne $message -and -not [string]::IsNullOrWhiteSpace([string]$message.Message)) {
+                            & $writeSupervisorMessage $message.Message
+                        }
                     }
+                }
+                catch {
+                    & $writeSupervisorMessage "Recovery cycle failed: $($_.Exception.Message)"
                 }
                 Start-Sleep -Seconds 3
             }
@@ -282,9 +296,12 @@ function Start-AclGui {
         catch { & $writeActivity $_.Exception.Message }
     }
     $invokeAction = {
-        param([scriptblock]$Operation, [string]$Label)
+        param([scriptblock]$Operation, [string]$Label, [bool]$ShowErrorDialog = $true)
         try { & $writeActivity "$Label..."; & $Operation | Out-Null; & $writeActivity "$Label completed." }
-        catch { & $writeActivity "$Label failed: $($_.Exception.Message)"; [System.Windows.MessageBox]::Show($_.Exception.Message, 'AzerothCore Launcher') | Out-Null }
+        catch {
+            & $writeActivity "$Label failed: $($_.Exception.Message)"
+            if ($ShowErrorDialog) { [System.Windows.MessageBox]::Show($_.Exception.Message, 'AzerothCore Launcher') | Out-Null }
+        }
         finally { & $refreshHealth }
     }
     $controls.NewProfileButton.Add_Click({ $profile = Show-AclProfileDialog; if ($null -ne $profile) { Save-AclProfile -Profile $profile -DataRoot $script:DataRoot | Out-Null; & $refreshProfiles; & $writeActivity "Created profile '$($profile.Name)'." } })
@@ -350,14 +367,14 @@ function Start-AclGui {
         Save-AclProfile -Profile $profile -DataRoot $script:DataRoot | Out-Null
         & $writeActivity "Saved recovery settings for '$($profile.Name)'."
     })
-    $controls.StopAllButton.Add_Click({ $profile = & $getProfile; & $writeActivity 'Canceling automatic recovery for Authserver and Worldserver.'; & $invokeAction { Stop-AclAll -Profile $profile -DataRoot $script:DataRoot } 'Stopping all servers' })
-    $controls.RestartAllButton.Add_Click({ $profile = & $getProfile; & $invokeAction { Restart-AclAll -Profile $profile -DataRoot $script:DataRoot } 'Restarting all servers' })
-    $controls.StartAuthButton.Add_Click({ $profile = & $getProfile; & $invokeAction { Start-AclServer -Profile $profile -Server Authserver -DataRoot $script:DataRoot } 'Starting Authserver' })
-    $controls.StopAuthButton.Add_Click({ $profile = & $getProfile; & $writeActivity 'Canceling automatic recovery for Authserver.'; & $invokeAction { Stop-AclServer -Profile $profile -Server Authserver -DataRoot $script:DataRoot } 'Stopping Authserver' })
-    $controls.RestartAuthButton.Add_Click({ $profile = & $getProfile; & $invokeAction { Restart-AclServer -Profile $profile -Server Authserver -DataRoot $script:DataRoot } 'Restarting Authserver' })
-    $controls.StartWorldButton.Add_Click({ $profile = & $getProfile; & $invokeAction { Start-AclServer -Profile $profile -Server Worldserver -DataRoot $script:DataRoot } 'Starting Worldserver' })
-    $controls.StopWorldButton.Add_Click({ $profile = & $getProfile; & $writeActivity 'Canceling automatic recovery for Worldserver.'; & $invokeAction { Stop-AclServer -Profile $profile -Server Worldserver -DataRoot $script:DataRoot } 'Stopping Worldserver' })
-    $controls.RestartWorldButton.Add_Click({ $profile = & $getProfile; & $invokeAction { Restart-AclServer -Profile $profile -Server Worldserver -DataRoot $script:DataRoot } 'Restarting Worldserver' })
+    $controls.StopAllButton.Add_Click({ $profile = & $getProfile; & $writeActivity 'Canceling automatic recovery for Authserver and Worldserver.'; & $invokeAction { Stop-AclAll -Profile $profile -DataRoot $script:DataRoot } 'Stopping all servers' $false })
+    $controls.RestartAllButton.Add_Click({ $profile = & $getProfile; & $invokeAction { Restart-AclAll -Profile $profile -DataRoot $script:DataRoot } 'Restarting all servers' $false })
+    $controls.StartAuthButton.Add_Click({ $profile = & $getProfile; & $invokeAction { Start-AclServer -Profile $profile -Server Authserver -DataRoot $script:DataRoot } 'Starting Authserver' $false })
+    $controls.StopAuthButton.Add_Click({ $profile = & $getProfile; & $writeActivity 'Canceling automatic recovery for Authserver.'; & $invokeAction { Stop-AclServer -Profile $profile -Server Authserver -DataRoot $script:DataRoot } 'Stopping Authserver' $false })
+    $controls.RestartAuthButton.Add_Click({ $profile = & $getProfile; & $invokeAction { Restart-AclServer -Profile $profile -Server Authserver -DataRoot $script:DataRoot } 'Restarting Authserver' $false })
+    $controls.StartWorldButton.Add_Click({ $profile = & $getProfile; & $invokeAction { Start-AclServer -Profile $profile -Server Worldserver -DataRoot $script:DataRoot } 'Starting Worldserver' $false })
+    $controls.StopWorldButton.Add_Click({ $profile = & $getProfile; & $writeActivity 'Canceling automatic recovery for Worldserver.'; & $invokeAction { Stop-AclServer -Profile $profile -Server Worldserver -DataRoot $script:DataRoot } 'Stopping Worldserver' $false })
+    $controls.RestartWorldButton.Add_Click({ $profile = & $getProfile; & $invokeAction { Restart-AclServer -Profile $profile -Server Worldserver -DataRoot $script:DataRoot } 'Restarting Worldserver' $false })
     $controls.EditAuthConfigButton.Add_Click({ $profile = & $getProfile; if ($null -ne $profile) { Start-Process notepad.exe -ArgumentList ('"{0}"' -f $profile.AuthConfigPath) } })
     $controls.EditWorldConfigButton.Add_Click({ $profile = & $getProfile; if ($null -ne $profile) { Start-Process notepad.exe -ArgumentList ('"{0}"' -f $profile.WorldConfigPath) } })
     $controls.OpenInstallButton.Add_Click({ $profile = & $getProfile; if ($null -ne $profile) { Start-Process explorer.exe -ArgumentList ('"{0}"' -f $profile.InstallPath) } })
@@ -415,15 +432,29 @@ if ($Action -eq 'Gui') {
 }
 else {
     $profile = Get-AclSelectedProfile -RequestedProfileId $ProfileId
-    $result = Invoke-AclAction -Profile $profile -RequestedAction $Action
-    if ($Action -eq 'Preflight') {
-        $result = [pscustomobject]@{
-            Authserver = $result.Authserver | Select-Object IsValid, Errors
-            Worldserver = $result.Worldserver | Select-Object IsValid, Errors
-        }
-    }
-    $resultJson = $result | ConvertTo-Json -Depth 8
     $resultName = 'action-{0}-{1}.json' -f $Action, [Uri]::EscapeDataString([string]$profile.Id)
     $resultPath = Join-Path (Join-Path $script:DataRoot 'Logs') $resultName
-    [IO.File]::WriteAllText($resultPath, $resultJson, [Text.UTF8Encoding]::new($false))
+    try {
+        $result = Invoke-AclAction -Profile $profile -RequestedAction $Action
+        if ($Action -eq 'Preflight') {
+            $result = [pscustomobject]@{
+                Authserver = $result.Authserver | Select-Object IsValid, Errors
+                Worldserver = $result.Worldserver | Select-Object IsValid, Errors
+            }
+        }
+        $resultJson = $result | ConvertTo-Json -Depth 8
+        [IO.File]::WriteAllText($resultPath, $resultJson, [Text.UTF8Encoding]::new($false))
+    }
+    catch {
+        $failure = [pscustomobject]@{
+            Action = $Action
+            ProfileId = $profile.Id
+            CompletedUtc = [DateTime]::UtcNow.ToString('o')
+            Success = $false
+            Error = $_.Exception.Message
+        }
+        [IO.File]::WriteAllText($resultPath, ($failure | ConvertTo-Json -Depth 3), [Text.UTF8Encoding]::new($false))
+        [Environment]::ExitCode = 1
+        exit 1
+    }
 }

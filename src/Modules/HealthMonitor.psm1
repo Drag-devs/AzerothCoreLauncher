@@ -297,6 +297,8 @@ function Invoke-AclRecoverySupervisor {
     $sqlOnline = if ($policy.RequireSqlOnline) { (Get-AclSqlServerStatus -Profile $Profile).IsOnline } else { $true }
     $authHealth = Get-AclServerHealth -Profile $Profile -Server Authserver -DataRoot $DataRoot
     $authOnline = $authHealth.State -eq 'Online'
+    $authRuntime = Get-AclServerRuntime -Profile $Profile -Server Authserver -DataRoot $DataRoot
+    $authRecoveryExhausted = -not $authOnline -and $null -ne $authRuntime -and $authRuntime.RecoveryState -eq 'Exhausted'
     $messages = New-Object 'System.Collections.Generic.List[object]'
 
     foreach ($server in @('Authserver', 'Worldserver')) {
@@ -337,11 +339,35 @@ function Invoke-AclRecoverySupervisor {
             if ($runtime.RecoveryState -ne 'Exhausted') {
                 $runtime.RecoveryState = 'Exhausted'
                 $runtime.NextRetryUtc = ''
+                $runtime.RecoveryBlockReason = ''
                 $runtime.LastExitReason = 'Recovery retry limit reached'
                 Set-AclServerRuntime -Profile $Profile -Server $server -Runtime $runtime -DataRoot $DataRoot
                 $messages.Add([pscustomobject]@{ Server = $server; Message = "$server recovery canceled after $($policy.MaxAttempts) failed retry attempts." })
             }
+            if ($server -eq 'Authserver') { $authRecoveryExhausted = $true }
             continue
+        }
+
+        if ($server -eq 'Worldserver' -and $authRecoveryExhausted) {
+            if ($runtime.RecoveryState -ne 'BlockedByAuthExhausted') {
+                $runtime.State = 'BlockedByAuthExhausted'
+                $runtime.RecoveryState = 'BlockedByAuthExhausted'
+                $runtime.RecoveryBlockReason = 'Authserver recovery retry limit reached'
+                $runtime.NextRetryUtc = ''
+                $runtime.LastExitReason = 'Authserver recovery retry limit reached'
+                Set-AclServerRuntime -Profile $Profile -Server $server -Runtime $runtime -DataRoot $DataRoot
+                $messages.Add([pscustomobject]@{ Server = $server; Message = 'Worldserver recovery stopped because Authserver recovery exhausted its retry limit.' })
+            }
+            continue
+        }
+
+        if ($server -eq 'Worldserver' -and $runtime.RecoveryState -eq 'BlockedByAuthExhausted') {
+            $runtime.State = 'RecoveryPending'
+            $runtime.RecoveryState = 'Idle'
+            $runtime.RecoveryBlockReason = ''
+            $runtime.NextRetryUtc = ''
+            $runtime.RetryAttempt = 0
+            Set-AclServerRuntime -Profile $Profile -Server $server -Runtime $runtime -DataRoot $DataRoot
         }
 
         $now = [DateTime]::UtcNow
@@ -356,6 +382,7 @@ function Invoke-AclRecoverySupervisor {
             $runtime.State = 'RecoveryPending'
             $runtime.LastExitReason = 'Process exited unexpectedly'
             $runtime.RecoveryState = 'Pending'
+            $runtime.RecoveryBlockReason = ''
             $runtime.HealthySinceUtc = ''
             $runtime.NextRetryUtc = $nextRetryUtc.ToString('o')
             Set-AclServerRuntime -Profile $Profile -Server $server -Runtime $runtime -DataRoot $DataRoot
@@ -370,10 +397,14 @@ function Invoke-AclRecoverySupervisor {
         $blockedReason = if (-not $sqlOnline) { 'SQL is unavailable' } elseif ($server -eq 'Worldserver' -and -not $authOnline) { 'Authserver is not online' } else { '' }
         if (-not [string]::IsNullOrWhiteSpace($blockedReason)) {
             $delaySeconds = Get-AclRecoveryDelaySeconds -Policy $policy -Attempt $runtime.RetryAttempt
+            $shouldReportWait = $runtime.RecoveryState -ne 'Waiting' -or $runtime.RecoveryBlockReason -ne $blockedReason
             $runtime.NextRetryUtc = $now.AddSeconds($delaySeconds).ToString('o')
             $runtime.RecoveryState = 'Waiting'
+            $runtime.RecoveryBlockReason = $blockedReason
             Set-AclServerRuntime -Profile $Profile -Server $server -Runtime $runtime -DataRoot $DataRoot
-            $messages.Add([pscustomobject]@{ Server = $server; Message = "$server recovery is waiting because $blockedReason. Next retry is at $(([DateTime]$runtime.NextRetryUtc).ToLocalTime().ToString('T'))." })
+            if ($shouldReportWait) {
+                $messages.Add([pscustomobject]@{ Server = $server; Message = "$server recovery is waiting because $blockedReason. Next retry is at $(([DateTime]$runtime.NextRetryUtc).ToLocalTime().ToString('T'))." })
+            }
             continue
         }
 
@@ -383,6 +414,7 @@ function Invoke-AclRecoverySupervisor {
             $restartedRuntime.RetryAttempt = $nextAttempt
             $restartedRuntime.RecoveryState = 'Recovering'
             $restartedRuntime.NextRetryUtc = ''
+            $restartedRuntime.RecoveryBlockReason = ''
             Set-AclServerRuntime -Profile $Profile -Server $server -Runtime $restartedRuntime -DataRoot $DataRoot
             $messages.Add([pscustomobject]@{ Server = $server; Message = "$server recovery retry $nextAttempt of $($policy.MaxAttempts) started." })
             if ($server -eq 'Authserver') { $authOnline = $false }
@@ -392,6 +424,7 @@ function Invoke-AclRecoverySupervisor {
             $delaySeconds = Get-AclRecoveryDelaySeconds -Policy $policy -Attempt $runtime.RetryAttempt
             $runtime.State = 'RecoveryPending'
             $runtime.RecoveryState = 'Pending'
+            $runtime.RecoveryBlockReason = ''
             $runtime.NextRetryUtc = $now.AddSeconds($delaySeconds).ToString('o')
             $runtime.LastExitReason = $_.Exception.Message
             Set-AclServerRuntime -Profile $Profile -Server $server -Runtime $runtime -DataRoot $DataRoot

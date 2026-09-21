@@ -209,6 +209,7 @@ function Initialize-AclRecoveryRuntime {
         RetryAttempt = 0
         NextRetryUtc = ''
         HealthySinceUtc = ''
+        RecoveryBlockReason = ''
     }
     foreach ($name in $defaults.Keys) {
         if ($null -eq $Runtime.PSObject.Properties[$name]) {
@@ -323,6 +324,7 @@ function Start-AclServer {
         RetryAttempt = 0
         NextRetryUtc = ''
         HealthySinceUtc = ''
+        RecoveryBlockReason = ''
     }
     Set-AclServerRuntime -Profile $Profile -Server $Server -Runtime $runtime -DataRoot $DataRoot
     return $runtime
@@ -358,6 +360,7 @@ function Stop-AclServer {
             RetryAttempt = 0
             NextRetryUtc = ''
             HealthySinceUtc = ''
+            RecoveryBlockReason = ''
         }
         Set-AclServerRuntime -Profile $Profile -Server $Server -Runtime $runtime -DataRoot $DataRoot
         return [pscustomobject]@{ Server = $Server; State = 'Stopped'; Message = 'No managed process is running. Automatic recovery is canceled until manual start.' }
