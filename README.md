@@ -1,5 +1,7 @@
 # AzerothCore Launcher
 
+<img width="1036" height="953" alt="Image" src="https://github.com/user-attachments/assets/4aa7cad2-c4e1-413f-a6b2-7fa6279b3d33" />
+
 A portable Windows launcher and supervisor for existing AzerothCore installations. It manages `authserver.exe` and `worldserver.exe` without modifying AzerothCore source or provisioning databases.
 
 ## Distribution Layout
