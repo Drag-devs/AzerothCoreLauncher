@@ -1,6 +1,10 @@
 # AzerothCore Launcher
 
+<<<<<<< HEAD
 <img width="1036" height="953" alt="Image" src="https://github.com/user-attachments/assets/4aa7cad2-c4e1-413f-a6b2-7fa6279b3d33" />
+=======
+> **Windows Defender note:** The unsigned `ps2exe` build may be flagged as `Trojan:Win32/Wacatac.C!ml` because optional scheduled startup creates a hidden elevated task and uses PowerShell execution-policy bypass. These behaviors support server startup and recovery, but they are also commonly associated with malware.
+>>>>>>> 4061284 (Added a note about possible Windows Defender detections)
 
 A portable Windows launcher and supervisor for existing AzerothCore installations. It manages `authserver.exe` and `worldserver.exe` without modifying AzerothCore source or provisioning databases.
 
